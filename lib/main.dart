@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'database/database_helper.dart';
+import 'models/student.dart';
 
 void main() {
   runApp(const StudentApp());
@@ -287,7 +289,7 @@ class HomePage extends StatelessWidget {
                         context,
                         MaterialPageRoute(
                           builder: (context) =>
-                          const ViewStudentPage(),
+                          const StudentListPage(),
                         ),
                       );
                     },
@@ -349,35 +351,51 @@ class _StudentRegistrationPageState
   final emailController =
   TextEditingController();
 
+  final DatabaseHelper _dbHelper = DatabaseHelper.instance;
+
   Future<void> saveStudent() async {
-    final prefs =
-    await SharedPreferences
-        .getInstance();
-
-    await prefs.setString(
-        "studentName",
-        nameController.text);
-
-    await prefs.setString(
-        "admissionNumber",
-        admissionController.text);
-
-    await prefs.setString(
-        "course",
-        courseController.text);
-
-    await prefs.setString(
-        "email",
-        emailController.text);
-
-    ScaffoldMessenger.of(context)
-        .showSnackBar(
-      const SnackBar(
-        content: Text(
-          "Student Saved Successfully",
+    if (nameController.text.isEmpty ||
+        admissionController.text.isEmpty ||
+        courseController.text.isEmpty ||
+        emailController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Please fill all fields"),
+          backgroundColor: Colors.red,
         ),
-      ),
+      );
+      return;
+    }
+
+    final student = Student(
+      name: nameController.text,
+      admissionNumber: admissionController.text,
+      course: courseController.text,
+      email: emailController.text,
     );
+
+    try {
+      await _dbHelper.createStudent(student);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Student Saved Successfully"),
+          backgroundColor: Colors.green,
+        ),
+      );
+      
+      // Clear all controllers after saving
+      nameController.clear();
+      admissionController.clear();
+      courseController.clear();
+      emailController.clear();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Error: ${e.toString()}"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   @override
@@ -465,12 +483,12 @@ class _StudentRegistrationPageState
                   context,
                   MaterialPageRoute(
                     builder: (context) =>
-                    const ViewStudentPage(),
+                    const StudentListPage(),
                   ),
                 );
               },
               child: const Text(
-                  "View Saved Record"),
+                  "View All Students"),
             ),
           ],
         ),
@@ -587,6 +605,372 @@ class _ViewStudentPageState
               const Text("Back"),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ================= STUDENT LIST PAGE =================
+
+class StudentListPage extends StatefulWidget {
+  const StudentListPage({super.key});
+
+  @override
+  State<StudentListPage> createState() => _StudentListPageState();
+}
+
+class _StudentListPageState extends State<StudentListPage> {
+  final DatabaseHelper _dbHelper = DatabaseHelper.instance;
+  List<Student> _students = [];
+  List<Student> _filteredStudents = [];
+  final TextEditingController _searchController = TextEditingController();
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStudents();
+  }
+
+  Future<void> _loadStudents() async {
+    setState(() => _isLoading = true);
+    final students = await _dbHelper.readAllStudents();
+    setState(() {
+      _students = students;
+      _filteredStudents = students;
+      _isLoading = false;
+    });
+  }
+
+  void _filterStudents(String query) {
+    setState(() {
+      if (query.isEmpty) {
+        _filteredStudents = _students;
+      } else {
+        _filteredStudents = _students.where((student) {
+          return student.name.toLowerCase().contains(query.toLowerCase()) ||
+              student.admissionNumber.toLowerCase().contains(query.toLowerCase()) ||
+              student.course.toLowerCase().contains(query.toLowerCase()) ||
+              student.email.toLowerCase().contains(query.toLowerCase());
+        }).toList();
+      }
+    });
+  }
+
+  Future<void> _deleteStudent(int id) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirm Delete'),
+        content: const Text('Are you sure you want to delete this student?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _dbHelper.deleteStudent(id);
+      _loadStudents();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Student deleted successfully')),
+      );
+    }
+  }
+
+  void _editStudent(Student student) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EditStudentPage(student: student),
+      ),
+    ).then((_) => _loadStudents());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Student Records"),
+        backgroundColor: Colors.purple,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadStudents,
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Search Bar
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search students...',
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                filled: true,
+                fillColor: Colors.grey[100],
+              ),
+              onChanged: _filterStudents,
+            ),
+          ),
+          // Student List
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _filteredStudents.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.inbox, size: 80, color: Colors.grey[400]),
+                            const SizedBox(height: 16),
+                            Text(
+                              _searchController.text.isEmpty
+                                  ? 'No students found'
+                                  : 'No matching students',
+                              style: TextStyle(fontSize: 18, color: Colors.grey[600]),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: _filteredStudents.length,
+                        itemBuilder: (context, index) {
+                          final student = _filteredStudents[index];
+                          return Card(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            elevation: 2,
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor: Colors.purple,
+                                child: Text(
+                                  student.name[0].toUpperCase(),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                              title: Text(
+                                student.name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Adm: ${student.admissionNumber}'),
+                                  Text('Course: ${student.course}'),
+                                  Text('Email: ${student.email}'),
+                                ],
+                              ),
+                              isThreeLine: true,
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.edit, color: Colors.blue),
+                                    onPressed: () => _editStudent(student),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete, color: Colors.red),
+                                    onPressed: () => _deleteStudent(student.id!),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const StudentRegistrationPage(),
+            ),
+          ).then((_) => _loadStudents());
+        },
+        backgroundColor: Colors.purple,
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+
+// ================= EDIT STUDENT PAGE =================
+
+class EditStudentPage extends StatefulWidget {
+  final Student student;
+
+  const EditStudentPage({super.key, required this.student});
+
+  @override
+  State<EditStudentPage> createState() => _EditStudentPageState();
+}
+
+class _EditStudentPageState extends State<EditStudentPage> {
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _nameController;
+  late TextEditingController _admissionController;
+  late TextEditingController _courseController;
+  late TextEditingController _emailController;
+  final DatabaseHelper _dbHelper = DatabaseHelper.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.student.name);
+    _admissionController = TextEditingController(text: widget.student.admissionNumber);
+    _courseController = TextEditingController(text: widget.student.course);
+    _emailController = TextEditingController(text: widget.student.email);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _admissionController.dispose();
+    _courseController.dispose();
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _updateStudent() async {
+    if (_formKey.currentState!.validate()) {
+      final updatedStudent = Student(
+        id: widget.student.id,
+        name: _nameController.text,
+        admissionNumber: _admissionController.text,
+        course: _courseController.text,
+        email: _emailController.text,
+      );
+
+      try {
+        await _dbHelper.updateStudent(updatedStudent);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Student updated successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context);
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Edit Student'),
+        backgroundColor: Colors.orange,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Student Name',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter student name';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+              TextFormField(
+                controller: _admissionController,
+                decoration: const InputDecoration(
+                  labelText: 'Admission Number',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter admission number';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+              TextFormField(
+                controller: _courseController,
+                decoration: const InputDecoration(
+                  labelText: 'Course',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter course';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+              TextFormField(
+                controller: _emailController,
+                decoration: const InputDecoration(
+                  labelText: 'Email Address',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter email';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 30),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _updateStudent,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  child: const Text(
+                    'Update Student',
+                    style: TextStyle(fontSize: 16),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
